@@ -1,14 +1,18 @@
-import open3d as o3d
+import os
+import random
+import sys
+import time
 
+import numpy as np
+import open3d as o3d
 import torch
 import torch.optim as optim
-import time, sys, os, random
 from tensorboardX import SummaryWriter
-import numpy as np
 
+import util.utils as utils
 from util.config import cfg
 from util.log import logger
-import util.utils as utils
+
 
 def init():
     # copy important files to backup

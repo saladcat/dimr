@@ -60,9 +60,10 @@ def read_txt(file):
 
 def get_coords_color(opt):
 
-    scan_data = np.load(os.path.join('./datasets/scannet/processed_data', opt.room_name, 'data.npz'))
+    # scan_data = np.load(os.path.join('./datasets/scannet/processed_data', opt.room_name, 'data.npz'))
+    scan_data = np.load(os.path.join('./datasets/processed_data', opt.room_name, 'data.npz'))
     #scan_data = np.load(os.path.join('./datasets_old/scannet/processed_data', opt.room_name, 'rfs_data.npz'))
-        
+         
     point_cloud = scan_data['mesh_vertices']
     xyz = point_cloud[:, :3]
     rgb = point_cloud[:, 3:]
@@ -162,7 +163,7 @@ def save(opt):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--result_root', help='path to the predicted results', default='exp/scannetv2/rfs/rfs_phase2_scannet/result/epoch200_nmst0.3_scoret0.05_npointt100/')
+    parser.add_argument('--result_root', help='path to the predicted results', default='exp/scannetv2/rfs/rfs_phase2_scannet/result/epoch256_nmst0.3_scoret0.05_npointt100/')
     parser.add_argument('--room_split', help='train / val / test', default='val')
     parser.add_argument('--room_name', help='room_name', default='scene0553_01')
     parser.add_argument('--task', help='input / semantic_gt / semantic_pred / instance_gt / instance_pred', default='semantic_gt')

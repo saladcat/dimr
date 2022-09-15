@@ -52,7 +52,7 @@ def eval(pred_dir, threshs=[0.5]):
 
         # gt points
         info_mesh_gts = []
-        scan_data = np.load(f'datasets/scannet/processed_data/{scene_name}/data.npz')
+        scan_data = np.load(f'datasets/processed_data/{scene_name}/data.npz')
         xyz = scan_data['mesh_vertices'].astype(np.float32)[:, :3]
         semantic_label = scan_data['semantic_labels'].astype(np.int32)
         instance_label = scan_data['instance_labels'].astype(np.int32) - 1

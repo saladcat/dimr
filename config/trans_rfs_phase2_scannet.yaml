@@ -26,7 +26,7 @@ STRUCTURE:
 
   use_rgb: False
   use_coords: True
-  scene_type: 'no'
+  scene_type: 'trans'
 
 TRAIN:
   epochs: 256

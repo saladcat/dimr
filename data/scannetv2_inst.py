@@ -75,7 +75,6 @@ class Dataset:
         logger.info('Testing samples ({}): {}'.format(self.test_split, len(self.test_files)))
 
         test_set = list(np.arange(len(self.test_files)))
-
         self.test_data_loader = DataLoader(test_set, batch_size=self.batch_size, collate_fn=self.testMerge, num_workers=self.test_workers,
                                            shuffle=False, drop_last=False, pin_memory=True)
 
@@ -243,7 +242,7 @@ class Dataset:
             elif split == 'test':
                 scan_name = self.test_files[idx] # in fact, this is the same as val_files 
 
-            scan_data = np.load(f'datasets/scannet/processed_data/{scan_name}/data.npz')
+            scan_data = np.load(f'datasets/processed_data/{scan_name}/data.npz')
 
             point_cloud = scan_data['mesh_vertices'].astype(np.float32)
             xyz_origin = point_cloud[:, 0:3]

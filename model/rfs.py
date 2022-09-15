@@ -10,11 +10,11 @@ import pyquaternion
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import spconv
-from spconv.modules import SparseModule
+import spconv.pytorch as spconv
+from spconv.pytorch.modules import SparseModule
 import functools
 from collections import OrderedDict
-
+from torch.nn.utils.rnn import pad_sequence
 from lib.pointgroup_ops.functions import pointgroup_ops
 from util import utils
 from model.bsp import CompNet, PolyMesh
@@ -75,7 +75,8 @@ class ResidualBlock(SparseModule):
         identity = spconv.SparseConvTensor(input.features, input.indices, input.spatial_shape, input.batch_size)
 
         output = self.conv_branch(input)
-        output.features += self.i_branch(identity).features
+        
+        output = output.replace_feature(output.features+ self.i_branch(identity).features)
 
         return output
 
@@ -140,7 +141,7 @@ class UBlock(nn.Module):
             output_decoder = self.u(output_decoder)
             output_decoder = self.deconv(output_decoder)
 
-            output.features = torch.cat((identity.features, output_decoder.features), dim=1)
+            output = output.replace_feature(torch.cat((identity.features, output_decoder.features), dim=1))
 
             output = self.blocks_tail(output)
 
@@ -150,7 +151,7 @@ class UBlock(nn.Module):
 class RfSNet(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-
+        self.scene_type = cfg.scene_type
         m = cfg.m # 16 or 32
         classes = cfg.classes
         block_reps = cfg.block_reps
@@ -249,6 +250,8 @@ class RfSNet(nn.Module):
             nn.LeakyReLU(0.01),
             nn.Linear(16*m, 56),
         )
+        # @zsy
+        self.transformer = torch.nn.TransformerEncoderLayer(256, 4, 256, 0.5)
 
         #### init
 
@@ -291,7 +294,7 @@ class RfSNet(nn.Module):
             param.requires_grad = False
         
         ### load pretrained bsp net
-        bsp_pretrain_dict = torch.load(os.path.join('datasets/bsp', 'model.pth'))
+        bsp_pretrain_dict = torch.load(os.path.join('datasets/bsp', 'model.pth.tar'))
         self.comp_net.load_state_dict(bsp_pretrain_dict, strict=False)
         print(f"Loaded pretrained BSP-Net: #params = {sum([p.numel() for p in self.comp_net.parameters()])}")
 
@@ -450,7 +453,10 @@ class RfSNet(nn.Module):
             coords_ = coords[object_idxs]
             pt_offsets_ = pt_offsets[object_idxs]
             semantic_preds_ = semantic_preds_CAD[object_idxs].int().cpu()
-
+            # print("batch_idxs_.shape",batch_idxs_.shape)
+            # print('batch_offsets_.shape',batch_offsets_.shape)
+            # print('pt_offsets_.shape',pt_offsets_.shape)
+            # print('semantic_preds_.shape',semantic_preds_.shape)
 
             # single-scale proposal gen (pointgroup)
             if self.training:
@@ -517,6 +523,7 @@ class RfSNet(nn.Module):
             #### proposals voxelization again
             input_feats, inp_map, proposal_angle, point_center, point_scale, proposal_semantics = self.clusters_voxelization(proposals_idx, proposals_offset, output_feats, semantic_scores_CAD, pt_angles, coords, self.score_fullscale, self.score_scale, self.mode)
 
+            # print("inp_map.shape",inp_map.shape)
             ### zs
             proposal_out = self.z_in(input_feats)
             proposal_out = self.z_net(proposal_out)
@@ -524,17 +531,65 @@ class RfSNet(nn.Module):
             proposal_out = proposal_out.features[inp_map.long()] # (sumNPoint, C)
             proposal_out = pointgroup_ops.roipool(proposal_out, proposals_offset.cuda())  # (nProposal, C) proposal-wise max_pooling
 
+            # print('proposals_offset.shape',proposals_offset.shape)
+            # print('proposals_offset.min max',proposals_offset.min(),proposals_offset.max())
             # concat cell & semantics
             proposal_out = torch.cat([proposal_out, point_center, point_scale], dim=1)
-
-            ### score
+            # print('proposal_out.shape',proposal_out.shape)
+            ### score 
             scores = self.z_score(proposal_out)
             ret['proposal_scores'] = (scores, proposals_idx, proposals_offset, proposal_semantics)
 
             ### CAD bbox
             if epoch > self.prepare_epochs_2:
                 proposal_zs = self.z_linear(proposal_out) # (nProposal, 256+...)
+                # instance 2 point_idx
+                ## proposals_idx[:,0] 是instance的ID
+                ## proposals_idx[:,1] 是cords的idx（去掉背景之前） 
+                # point_idx 2 batch_idx
+                ## batch_idxs: cords idx -> batch_id 
+                # @ZSY
+                
+                if self.scene_type in ['no']:
+                    pass    
+                
+                if self.scene_type in ['trans','batch_1_trans']:
+                    proposal_zs = proposal_zs.unsqueeze(1)
+                    proposal_zs = self.transformer(proposal_zs) 
+                    proposal_zs = proposal_zs.squeeze(1)
 
+                if self.scene_type in ['no_mask_trans','mask_trans']:
+                    batch_proposal_zs = []
+                    idx2ori_idx = []
+                    batch_len = []
+                    mask = []
+
+                    instance_id = proposals_idx[proposals_offset[:-1].long()][:,0]
+                    batch_id = batch_idxs[proposals_idx[proposals_offset[:-1].long()][:,1].long()]
+                    batch_n = torch.max(batch_id) + 1 
+                    for batch_n_ in range(batch_n):
+                        ids = torch.masked_select(instance_id,batch_id == batch_n_).long()
+                        _mask = torch.zeros_like(ids).cuda().bool()
+                        mask.append(_mask)
+                        _proposal_zs = proposal_zs[ids,:]
+                        batch_proposal_zs.append(_proposal_zs)
+                        idx2ori_idx.append(ids)
+                        batch_len.append(ids.shape[0])
+                    batch_proposal_zs = pad_sequence(batch_proposal_zs)
+                    mask = pad_sequence(mask,padding_value=True,batch_first=True)
+                    idx2ori_idx = torch.cat(idx2ori_idx)
+                    if self.scene_type in ['no_mask_trans']:
+                        batch_proposal_zs = self.transformer(batch_proposal_zs)
+                    if self.scene_type in ['mask_trans']:
+                        batch_proposal_zs = self.transformer(batch_proposal_zs,src_key_padding_mask = mask)
+                    
+                    proposal_zs_flatten = []
+                    for batch_n_ in range(batch_n):
+                        proposal_zs_flatten.append(batch_proposal_zs[:batch_len[batch_n_],batch_n_,:])
+                        
+                    proposal_zs_flatten = torch.cat(proposal_zs_flatten,dim=0)
+                    proposal_zs = proposal_zs_flatten
+                        
                 residual_bbox = self.z_box(proposal_out)
                 residual_center = residual_bbox[:, 0: 8*3]
                 residual_scale = residual_bbox[:, 8*3: 8*6]
